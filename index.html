@@ -148,8 +148,8 @@ body{font-family:'Aptos','Segoe UI','Helvetica Neue',sans-serif;background:var(-
 .timer-bar{background:var(--blue);color:#fff;text-align:center;padding:10px;font-family:'Cormorant Garamond',Georgia,serif;font-size:1.5rem;font-weight:700;border-radius:10px}
 .timer-bar.warning{background:var(--gold)}
 .timer-bar.urgent{background:var(--wrong)}
-.word-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px}
-.word-tile{padding:14px 6px;border-radius:10px;border:2px solid var(--border);background:var(--surface);font-size:.85rem;font-weight:600;text-align:center;cursor:pointer;transition:all .15s;min-height:52px;display:flex;align-items:center;justify-content:center;user-select:none}
+.word-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;position:relative}
+.word-tile{padding:14px 6px;border-radius:10px;border:2px solid var(--border);background:var(--surface);font-size:.85rem;font-weight:600;text-align:center;cursor:pointer;transition:background .2s,color .2s,transform .35s cubic-bezier(.34,1.56,.64,1),opacity .2s;min-height:52px;display:flex;align-items:center;justify-content:center;user-select:none}
 .word-tile:hover{border-color:var(--blue);background:var(--blue-pale)}
 .word-tile.selected{background:var(--blue);color:#fff;border-color:var(--blue)}
 .word-tile.correct{cursor:default;border-color:transparent}
@@ -194,15 +194,18 @@ body{font-family:'Aptos','Segoe UI','Helvetica Neue',sans-serif;background:var(-
 .tag-purple{background:var(--cat-purple);color:#fff}
 
 /* ── TILE ANIMATION ── */
-@keyframes tileGroup {
+@keyframes tileRipple {
   0%   { transform: scale(1); }
-  30%  { transform: scale(1.18) rotate(-3deg); box-shadow: 0 8px 24px rgba(26,63,168,0.25); }
-  60%  { transform: scale(1.12) rotate(2deg); }
-  80%  { transform: scale(1.05); }
+  40%  { transform: scale(1.22); box-shadow: 0 6px 20px rgba(26,63,168,0.3); }
+  70%  { transform: scale(0.95); }
   100% { transform: scale(1); }
 }
-.word-tile.animating {
-  animation: tileGroup 0.55s ease both;
+@keyframes tileSlideUp {
+  from { transform: translateY(var(--slide-y)) scale(1.05); opacity:.9; }
+  to   { transform: translateY(0) scale(1); opacity:1; }
+}
+.word-tile.rippling {
+  animation: tileRipple 0.38s ease both;
   z-index: 10;
   position: relative;
 }
@@ -979,6 +982,64 @@ function toggleWord(tile) {
   document.getElementById('btn-submit-group').style.display = count === 4 ? 'block' : 'none';
 }
 
+function animateTilesCorrect(matchedCat, tiles) {
+  const grid = document.getElementById('word-grid');
+  const allTiles = Array.from(tiles);
+  const matchingTiles = allTiles.filter(t => matchedCat.words.includes(t.dataset.word));
+  const remainingTiles = allTiles.filter(t => !matchedCat.words.includes(t.dataset.word) && !t.classList.contains('correct'));
+
+  // Step 1: Staggered ripple on the 4 matching tiles
+  matchingTiles.forEach((t, i) => {
+    t.classList.remove('selected');
+    setTimeout(() => {
+      t.classList.add('rippling');
+      setTimeout(() => t.classList.remove('rippling'), 400);
+    }, i * 80); // 80ms stagger per tile
+  });
+
+  // Step 2: After ripple, reorder the DOM so correct tiles occupy the next top row
+  setTimeout(() => {
+    // Get current grid bounding rects BEFORE reorder (for FLIP animation)
+    const beforeRects = new Map();
+    allTiles.forEach(t => beforeRects.set(t, t.getBoundingClientRect()));
+
+    // Reorder: solved tiles first (in order), then remaining unsolved
+    // Already-correct tiles from previous rounds stay at top
+    const alreadyCorrect = allTiles.filter(t => t.classList.contains('correct'));
+    const newOrder = [...alreadyCorrect, ...matchingTiles, ...remainingTiles];
+    // Clear grid and re-append in new order
+    newOrder.forEach(t => grid.appendChild(t));
+
+    // Mark as correct colour immediately (hidden behind FLIP)
+    matchingTiles.forEach(t => {
+      t.classList.add('correct', matchedCat.colour);
+    });
+
+    // Step 3: FLIP animation — measure new positions, animate from old
+    allTiles.forEach(t => {
+      const before = beforeRects.get(t);
+      const after = t.getBoundingClientRect();
+      const dx = before.left - after.left;
+      const dy = before.top - after.top;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+        // Start at old position
+        t.style.transition = 'none';
+        t.style.transform = `translate(${dx}px, ${dy}px)`;
+        // Force reflow
+        t.getBoundingClientRect();
+        // Animate to new position
+        t.style.transition = 'transform 0.45s cubic-bezier(.25,.46,.45,.94)';
+        t.style.transform = 'translate(0,0)';
+        // Cleanup
+        t.addEventListener('transitionend', () => {
+          t.style.transition = '';
+          t.style.transform = '';
+        }, { once: true });
+      }
+    });
+  }, matchingTiles.length * 80 + 350); // wait for all ripples to finish
+}
+
 function submitGroup() {
   if (STATE.selectedWords.length !== 4) return;
 
@@ -1006,23 +1067,8 @@ function submitGroup() {
     const pts = STATE.attempts[label] === 1 ? 16 : STATE.attempts[label] === 2 ? 12 : 8;
     STATE.score += pts;
 
-    // Animate tiles, then mark correct
-    const matchingTiles = [];
-    tiles.forEach(t => {
-      if (matchedCat.words.includes(t.dataset.word)) {
-        matchingTiles.push(t);
-      }
-    });
-    matchingTiles.forEach(t => {
-      t.classList.remove('selected');
-      t.classList.add('animating');
-    });
-    setTimeout(() => {
-      matchingTiles.forEach(t => {
-        t.classList.remove('animating');
-        t.classList.add('correct', matchedCat.colour);
-      });
-    }, 550);
+    // NYT-style: stagger ripple → reorder tiles into top rows
+    animateTilesCorrect(matchedCat, tiles);
 
     banner.textContent = `✓ "${label}" — +${pts} pts`;
     banner.className   = 'solved-banner show correct';
