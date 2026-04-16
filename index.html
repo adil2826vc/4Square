@@ -1064,7 +1064,7 @@ function submitGroup() {
     STATE.solvedGroups[label] = STATE.attempts[label];
 
     // Score
-    const pts = STATE.attempts[label] === 1 ? 16 : STATE.attempts[label] === 2 ? 12 : 8;
+    const pts = STATE.attempts[label] === 1 ? 4 : STATE.attempts[label] === 2 ? 3 : 2;
     STATE.score += pts;
 
     // NYT-style: stagger ripple → reorder tiles into top rows
