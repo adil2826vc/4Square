@@ -72,11 +72,11 @@ body{font-family:'Aptos','Segoe UI','Helvetica Neue',sans-serif;background:var(-
 .form-group input:focus,.form-group textarea:focus{border-color:var(--blue)}
 .form-group textarea{resize:vertical;min-height:100px;font-family:monospace;font-size:.85rem}
 .rules-box{background:var(--blue);border-radius:12px;padding:20px 24px;color:#fff}
-.rules-box h3{font-family:'Cormorant Garamond',Georgia,serif;font-size:1.2rem;font-weight:700;margin-bottom:16px;color:#ffffff;opacity:1}
+.rules-box h3{font-family:'Cormorant Garamond',Georgia,serif;font-size:1.6rem;font-weight:700;margin-bottom:16px;color:#ffffff;opacity:1}
 .rules-box ul{list-style:none;padding:0}
-.rules-box ul li{padding:6px 0;font-size:.9rem;opacity:.9;border-bottom:1px solid rgba(255,255,255,.1)}
+.rules-box ul li{padding:6px 0;font-size:1.1rem;opacity:.9;border-bottom:1px solid rgba(255,255,255,.1)}
 .rules-box ul li:last-child{border-bottom:none}
-.rules-box ul li::before{content:'◆ ';font-size:.7rem;opacity:.7}
+.rules-box ul li::before{content:'◆ ';font-size:.9rem;opacity:.7}
 .setup-footer{background:var(--surface);border-top:1px solid var(--border);padding:16px 32px;display:flex;justify-content:space-between;align-items:center}
 
 /* ── LOBBY SCREEN (host) ── */
@@ -104,8 +104,8 @@ body{font-family:'Aptos','Segoe UI','Helvetica Neue',sans-serif;background:var(-
 .game-body{flex:1;display:grid;grid-template-columns:2fr 1fr;gap:0;overflow:hidden}
 .board-panel{padding:24px;overflow-y:auto;border-right:1px solid var(--border)}
 .board-panel h2{font-family:'Cormorant Garamond',Georgia,serif;font-size:1.2rem;color:var(--blue);margin-bottom:16px}
-.answer-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:20px}
-.answer-tile{border-radius:10px;padding:14px 8px;text-align:center;font-weight:700;font-size:.9rem;display:flex;align-items:center;justify-content:center;min-height:56px}
+.answer-grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;margin-bottom:20px}
+.answer-tile{border-radius:12px;padding:24px 12px;text-align:center;font-weight:700;font-size:1.1rem;display:flex;align-items:center;justify-content:center;min-height:90px}
 .answer-tile.yellow{background:var(--cat-yellow);color:var(--cat-yellow-dark)}
 .answer-tile.green {background:var(--cat-green);color:var(--cat-green-dark)}
 .answer-tile.blue  {background:var(--cat-blue);color:#fff}
@@ -811,7 +811,6 @@ function resetGame() {
   STATE.categories = [];
   STATE.selectedWords = [];
   STATE.solvedGroups = {};
-  STATE.attempts = {};
   STATE.score = 0;
   STATE.timerRunning = false;
   clearInterval(STATE.timerInterval);
@@ -915,7 +914,6 @@ function watchAudienceLobby() {
 function startPlayerGame() {
   STATE.selectedWords = [];
   STATE.solvedGroups  = {};
-  STATE.attempts      = {};
   STATE.score         = 0;
 
   if (STATE.role === 'team') {
@@ -950,6 +948,7 @@ function buildWordGrid() {
 function watchPlayerTimer() {
   db.ref(`games/${STATE.gameId}/timerRemaining`).on('value', snap => {
     const secs = snap.val() || 0;
+    STATE.timerRemaining = secs;
     updateTimerDisplay(secs, 'player-timer');
     if (secs <= 0 && !STATE.submitted) {
       autoSubmit();
@@ -1059,31 +1058,25 @@ function submitGroup() {
   if (matchedCat && !STATE.solvedGroups[matchedCat.label]) {
     // Correct!
     const label = matchedCat.label;
-    if (!STATE.attempts[label]) STATE.attempts[label] = 0;
-    STATE.attempts[label]++;
-    STATE.solvedGroups[label] = STATE.attempts[label];
-
-    // Score
-    const pts = STATE.attempts[label] === 1 ? 4 : STATE.attempts[label] === 2 ? 3 : 2;
-    STATE.score += pts;
+    STATE.solvedGroups[label] = true;
 
     // NYT-style: stagger ripple → reorder tiles into top rows
     animateTilesCorrect(matchedCat, tiles);
 
-    banner.textContent = `✓ "${label}" — +${pts} pts`;
+    const solvedCount = Object.keys(STATE.solvedGroups).length;
+    banner.textContent = `✓ "${label}" — ${solvedCount}/4 solved`;
     banner.className   = 'solved-banner show correct';
 
-    // Update Firebase
+    // Update Firebase (no score yet — calculated on submit)
     if (STATE.role === 'team') {
       const key = sanitize(STATE.teamName);
       fbUpdate(`games/${STATE.gameId}/teams/${key}`, {
-        score: STATE.score,
-        [`solved/${sanitize(label)}`]: STATE.attempts[label],
+        [`solved/${sanitize(label)}`]: true,
       });
     }
 
     // Check if all solved
-    if (Object.keys(STATE.solvedGroups).length === 4) {
+    if (solvedCount === 4) {
       markSubmitted();
     }
   } else {
@@ -1092,14 +1085,7 @@ function submitGroup() {
       // Already solved
       banner.textContent = `You already solved "${matchedCat.label}"!`;
     } else {
-      // Track attempt per possible category
-      STATE.selectedWords.forEach(w => {
-        const cat = STATE.categories.find(c => c.words.includes(w));
-        if (cat) {
-          if (!STATE.attempts[cat.label]) STATE.attempts[cat.label] = 0;
-          STATE.attempts[cat.label] += 0.25; // partial
-        }
-      });
+      // Wrong guess
       banner.textContent = 'Not quite — try again!';
     }
     banner.className = 'solved-banner show wrong';
@@ -1118,11 +1104,33 @@ function submitGroup() {
   setTimeout(() => { banner.className = 'solved-banner'; }, 2500);
 }
 
+function calcScore() {
+  const solvedCount = Object.keys(STATE.solvedGroups).length;
+  if (solvedCount < 2) return 0;
+  if (solvedCount === 2) return 5;
+  if (solvedCount === 3) return 5;
+  // All 4 solved — time-based
+  const pctRemaining = STATE.timerRemaining / STATE.timerSecs;
+  if (pctRemaining > 0.75) return 25;
+  if (pctRemaining > 0.50) return 20;
+  if (pctRemaining > 0.25) return 15;
+  return 10;
+}
+
 function markSubmitted() {
   STATE.submitted = true;
+  STATE.score = calcScore();
+
   if (STATE.role === 'team') {
-    fbUpdate(`games/${STATE.gameId}/teams/${sanitize(STATE.teamName)}`, { submitted: true });
+    fbUpdate(`games/${STATE.gameId}/teams/${sanitize(STATE.teamName)}`, {
+      submitted: true,
+      score: STATE.score,
+    });
   }
+
+  const scoreEl = document.getElementById('player-score-val');
+  if (scoreEl) scoreEl.textContent = STATE.score;
+
   document.getElementById('reveal-waiting').style.display = 'block';
   document.getElementById('btn-submit-group').style.display = 'none';
   // Disable remaining tiles
